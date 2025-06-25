@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/shiponcs/bot-go/discord"
 )
 
 var (
@@ -74,17 +76,38 @@ func messageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
+	content := m.Content
+	channel_id := ""
+	channel_name := "Direct message"
+
 	if channel.Type != discordgo.ChannelTypeDM {
-		fmt.Println("Not a DM, ignore")
-		return
+		fmt.Println("Not a DM")
+		botMentionRegex, err := discordBotMentionRegex(s.State.User.ID)
+		if err != nil {
+			fmt.Println("can't build botMentionRegex")
+			return
+		}
+
+		req, found := findAndTrimBotMention(botMentionRegex, m.Content)
+		if !found {
+			fmt.Println("Not a DM nor a mentioned one, ignoring")
+			return
+		}
+		content = req
+		channel_id = m.ChannelID
+		channel_name = "channel message"
+		fmt.Println("the mentioned message ", req)
 	}
 
 	payload := map[string]interface{}{
 		"username":  m.Author.Username + "#" + m.Author.Discriminator,
 		"user_id":   m.Author.ID,
-		"content":   m.Content,
-		"channel":   "Direct Message",
+		"content":   content,
+		"channel":   channel_name,
 		"timestamp": m.Timestamp,
+	}
+	if channel_id != "" {
+		payload["channel_id"] = channel_id
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -101,4 +124,21 @@ func messageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	defer resp.Body.Close()
 
 	log.Printf("Message sent to n8n: %d", resp.StatusCode)
+}
+
+func discordBotMentionRegex(botID string) (*regexp.Regexp, error) {
+	botMentionRegex, err := regexp.Compile(fmt.Sprintf(discord.DiscordBotMentionRegexFmt, botID))
+	if err != nil {
+		return nil, fmt.Errorf("while compiling bot mention regex: %w", err)
+	}
+
+	return botMentionRegex, nil
+}
+
+func findAndTrimBotMention(botMentionRegex *regexp.Regexp, msg string) (string, bool) {
+	if !botMentionRegex.MatchString(msg) {
+		return "", false
+	}
+
+	return botMentionRegex.ReplaceAllString(msg, ""), true
 }
